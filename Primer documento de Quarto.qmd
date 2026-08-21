@@ -1,0 +1,90 @@
+---
+title: "Mi primer documento de Quarto"
+format: html
+---
+
+```{r}
+library(tidyverse)
+library(fpp3)
+```
+
+## Introducción
+
+**negritas**
+
+*cursivas*
+
+Algunos atajos útiles de teclado:
+
+- CTRL + ALT + SHIFT # Para insertar un chunk de código.
+- CTRL + SHIFT + ENTER # Para ejecutar un chunk de código.
+- CTRL + ENTER # Para correr el chunk de código donde se encuentra el cursor.
+- CTRL + SHIFT + M # Para instertar un pipe (%>%).
+
+'dplr' tiene una función llamada 'filter()' que oculta la función del mismo nombre de la paquetería 'stats'. Si quisiera usar la función, tendría que escribirla así:
+
+```{r}
+#| eval: false
+
+stats::filter()
+```
+
+```{r}
+#| eval: false
+
+readxl::read_excel() # Permite importar librerías de Excel.
+```
+
+```{r}
+tourism
+```
+
+Para conocer cuál variable es la 'index', puedo usar 'index_var()
+
+```{r}
+index_var(tourism)
+```
+
+```{r}
+key_vars(tourism)
+```
+
+```{r}
+key_data(tourism)
+```
+
+```{r}
+distinct(filter(tourism, State == 'Tasmania'), Region)
+```
+
+```{r}
+tourism |> 
+  filter(
+    State == 'Tasmania', 
+    Region == 'East Coast'
+    ) |> 
+        as_tibble() |> 
+  group_by(Purpose) |>
+  summarise(mean_strips = mean(Trips))
+```
+
+```{r}
+tourism |> 
+    filter(
+        State == 'Tasmania', 
+        Region == 'East Coast'
+        ) |> 
+        autoplot(Trips) +
+        facet_wrap(vars(Purpose), scales = 'free_y') +
+        theme_minimal() +
+        theme(legend.position = 'none') +
+        labs(title = "Viajes por propósito en la Costa Este de Tasmania",
+             subtitle = 'Australia',
+             y = "Viajes (miles)",
+             caption = "Datos de la paquetería fpp3")
+```
+
+
+```{r}
+
+```
