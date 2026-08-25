@@ -83,8 +83,3 @@ tourism |>
              y = "Viajes (miles)",
              caption = "Datos de la paquetería fpp3")
 ```
-
-
-```{r}
-
-```
