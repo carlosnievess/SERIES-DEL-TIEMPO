@@ -1,0 +1,86 @@
+---
+title: "Descomposición"
+format: html
+---
+
+```{r}
+library(tidyverse)
+library(fpp3)
+```
+
+Importamos los datos:
+
+```{r}
+medicinas <- read_csv("medicinas.csv") |> 
+    select(-Month)
+
+medicinas
+```
+
+Cuando importamos una tabla, esta es una "tibble", y cuando trabajamos con series de tiempo necesitamos que sea una "tsibble". Para ello, usamos la función `as_tsibble()`:
+
+```{r}
+medicinas_tsb <- medicinas |> 
+    as_tsibble(index = fecha) |> 
+    mutate(
+        fecha = yearmonth(fecha)
+    )
+
+medicinas_tsb
+```
+
+Graficamos la serie:
+
+```{r}
+medicinas_tsb |> 
+    autoplot(Cost)
+```
+
+## Descomposición
+
+### Descomposición clásica
+
+### Aditiva
+
+```{r}
+medicinas_tsb |> 
+    model(
+        clasica = classical_decomposition((Cost), type = 
+            "additive")
+    ) |> 
+    components() |> 
+    autoplot()
+```
+
+### Aditiva mas logaritmo
+
+```{r}
+medicinas_tsb |> 
+    model(
+        clasica = classical_decomposition(log(Cost), type = "additive")
+    ) |> 
+    components() |> 
+    autoplot()
+```
+
+### Multiplicativa
+
+```{r}
+medicinas_tsb |> 
+    model(
+        clasica = classical_decomposition((Cost), type = "multiplicative")
+    ) |> 
+    components() |> 
+    autoplot()
+```
+
+## Descimposición STL
+
+```{r}
+medicinas_tsb |> 
+    model(
+        stl = STL(Cost ~ season(window = "periodic"), robust = TRUE)
+    ) |> 
+    components() |> 
+    autoplot()
+```
