@@ -74,7 +74,7 @@ medicinas_tsb |>
     autoplot()
 ```
 
-## Descimposición STL
+## Descomposición STL
 
 ```{r}
 medicinas_tsb |> 
@@ -84,3 +84,4 @@ medicinas_tsb |>
     components() |> 
     autoplot()
 ```
+
