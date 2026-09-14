@@ -1,0 +1,398 @@
+---
+title: "Ejercicio de pronóstico"
+subtitle: "Importaciones en EEUU de autos mexicanos"
+author: "Carlos Nieves"
+date: 2026-09-10
+lang: es
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+```{r}
+#| label: setup
+#| message: false
+#| warning: false
+library(fpp3)
+```
+
+# Datos
+
+La serie MAUINSA de la FRED registra las importaciones mensuales de autos mexicanos hacia Estados Unidos, medidas en miles de unidades y sin ajuste estacional (Bureau of Economic Analysis).
+
+```{r}
+#| label: datos
+#| message: false
+#| warning: false
+imports <- tidyquant::tq_get(
+  x    = "MAUINSA",
+  get  = "economic.data",
+  from = "1993-01-01",
+  to   = "2025-10-01"
+) |>
+  mutate(
+    date = yearmonth(date)
+  ) |>
+  as_tsibble(index = date)
+
+imports
+```
+
+```{r}
+#| label: huecos
+c(n_obs = nrow(imports), huecos = sum(has_gaps(imports)$.gaps))
+```
+
+Son `r nrow(imports)` observaciones mensuales, de enero de 1993 a octubre de 2025, sin huecos. El objetivo es pronosticar los 14 meses siguientes, de noviembre de 2025 a diciembre de 2026.
+
+# Análisis exploratorio
+
+## La serie completa
+
+```{r}
+#| label: fig-serie
+#| fig-cap: "Importaciones de autos mexicanos a EEUU, 1993–2025."
+#| fig-width: 9
+#| fig-height: 4
+imports |>
+  autoplot(price) +
+  labs(
+    title = "Importaciones de autos mexicanos a EEUU",
+    y = "Miles de unidades", x = NULL
+  )
+```
+
+La serie crece con fuerza de 1993 a mediados de los 2010, se estanca cerca de las 105 mil unidades entre 2014 y 2019, cae en 2020 y se mantiene por debajohasta 2024. En 2025 sube de forma abrupta a un nivel que no se había visto antes. También hay caídas puntuales muy marcadas en enero de 2009 y en mayo de 2020, esta última la más profunda de toda la muestra reciente.
+
+Un detalle importante para la modelación es que la amplitud de las oscilaciones crece junto con el nivel de la serie. En los años noventa, las fluctuaciones son de unas pocas unidades y en la última década son de decenas.
+
+## Estacionalidad
+
+```{r}
+#| label: fig-season
+#| fig-cap: "Patrón estacional por año."
+#| fig-width: 9
+#| fig-height: 5
+imports |>
+  gg_season(price) +
+  labs(y = "Miles de unidades", x = NULL)
+```
+
+```{r}
+#| label: fig-subseries
+#| fig-cap: "Subseries mensuales. La línea azul es la media de cada mes."
+#| fig-width: 10
+#| fig-height: 5
+imports |>
+  gg_subseries(price) +
+  labs(y = "Miles de unidades", x = NULL)
+```
+
+El patrón mensual es estable a lo largo de toda la muestra, enero es el mes más bajo, marzo el más alto, y diciembre vuelve a subir. La forma se repite año con año, lo que indica que un componente estacional fijo es razonable.
+
+## Autocorrelación
+
+```{r}
+#| label: fig-acf
+#| fig-cap: "Serie, ACF y gráfica estacional."
+#| fig-width: 9
+#| fig-height: 6
+imports |>
+  gg_tsdisplay(price, plot_type = "season")
+```
+
+La ACF decae muy despacio, señal de la tendencia, y muestra picos locales en los rezagos 12 y 24, señal de la estacionalidad anual.
+
+## Descomposición STL
+
+```{r}
+#| label: fig-stl
+#| fig-cap: "Descomposición STL de la serie original."
+#| fig-width: 9
+#| fig-height: 7
+imports |>
+  model(
+    STL(price ~ trend() + season(), robust = TRUE)
+  ) |>
+  components() |>
+  autoplot()
+```
+
+```{r}
+#| label: feat-stl
+imports |>
+  features(price, feat_stl) |>
+  select(trend_strength, seasonal_strength_year)
+```
+
+La fuerza de la tendencia es de `r round(imports |> features(price, feat_stl) |> pull(trend_strength), 2)` y la de la estacionalidad de `r round(imports |> features(price, feat_stl) |> pull(seasonal_strength_year), 2)`. Los dos componentes son relevantes, así que el modelo tiene que capturar ambos. El residuo de la descomposición confirma lo que se ve en la serie; su dispersión no es constante, es mayor cuando el nivel es más alto.
+
+## Transformación
+
+Como la variabilidad crece con el nivel, conviene una transformación de Box-Cox. El parámetro se elige con el método de Guerrero sobre el conjunto de entrenamiento, para no usar información del periodo de prueba.
+
+```{r}
+#| label: split
+h <- 14
+
+imports_train <- imports |>
+  slice_head(n = nrow(imports) - h)
+
+imports_test <- imports |>
+  slice_tail(n = h)
+
+lambda <- imports_train |>
+  features(price, features = guerrero) |>
+  pull(lambda_guerrero)
+
+lambda
+```
+
+El valor de $\lambda$ = `r round(lambda, 3)` está cerca de cero, es decir, la transformación se parece a un logaritmo: la serie se comporta de manera aproximadamente multiplicativa.
+
+# División entrenamiento / prueba
+
+El conjunto de prueba tiene el mismo tamaño que el horizonte de pronóstico, 14 meses.
+
+```{r}
+#| label: split-info
+c(
+  entrenamiento = nrow(imports_train),
+  prueba        = nrow(imports_test)
+)
+
+range(imports_train$date)
+range(imports_test$date)
+```
+
+El entrenamiento va de enero de 1993 a agosto de 2024 y la prueba de septiembre de 2024 a octubre de 2025.
+
+# Especificación y estimación
+
+Se ajustan los cuatro métodos de referencia, sus versiones con Box-Cox y dos modelos de descomposición STL. En los modelos STL el componente estacional se pronostica con SNAIVE y la serie desestacionalizada con deriva.
+
+```{r}
+#| label: fit-bench
+imports_fit <- imports_train |>
+  model(
+    mean      = MEAN(price),
+    naive     = NAIVE(price),
+    snaive    = SNAIVE(price),
+    drift     = RW(price ~ drift()),
+    snaive_bc = SNAIVE(box_cox(price, lambda)),
+    drift_bc  = RW(box_cox(price, lambda) ~ drift())
+  )
+
+imports_fit
+```
+
+```{r}
+#| label: fit-stl
+stl_spec <- decomposition_model(
+  STL(price ~ trend() + season(), robust = TRUE),
+  SNAIVE(season_year),
+  RW(season_adjust ~ drift())
+)
+
+stl_spec_bc <- decomposition_model(
+  STL(box_cox(price, lambda) ~ trend() + season(), robust = TRUE),
+  SNAIVE(season_year),
+  RW(season_adjust ~ drift())
+)
+
+imports_fit_dcmp <- imports_train |>
+  model(
+    stl_drift    = stl_spec,
+    stl_drift_bc = stl_spec_bc
+  )
+
+imports_fit_dcmp
+```
+
+# Evaluación de residuales
+
+```{r}
+#| label: sigma
+bind_rows(
+  imports_fit      |> augment() |> as_tibble(),
+  imports_fit_dcmp |> augment() |> as_tibble()
+) |>
+  group_by(.model) |>
+  summarise(sigma_hat = sd(.innov, na.rm = TRUE)) |>
+  mutate(escala = if_else(grepl("_bc$", .model), "Box-Cox", "original")) |>
+  arrange(escala, sigma_hat)
+```
+
+Los residuales de los modelos con Box-Cox están en la escala transformada, así que solo se pueden comparar entre ellos. Dentro de cada grupo el orden es el mismo: el modelo STL tiene la desviación estándar más baja.
+
+```{r}
+#| label: ljung
+bind_rows(
+  imports_fit      |> augment() |> features(.innov, ljung_box, lag = 24, dof = 0),
+  imports_fit_dcmp |> augment() |> features(.innov, ljung_box, lag = 24, dof = 0)
+) |>
+  arrange(lb_stat)
+```
+
+Ningún modelo produce residuales de ruido blanco: todos los valores $p$ son menores a 0.05. Aun así, el estadístico de Ljung-Box separa claramente a los dos modelos STL del resto. Vale la pena ver los residuales del mejor modelo de referencia y del mejor modelo STL.
+
+```{r}
+#| label: fig-res-drift
+#| fig-cap: "Residuales de RW con deriva y Box-Cox."
+#| fig-width: 9
+#| fig-height: 5
+#| warning: false
+imports_fit |>
+  select(drift_bc) |>
+  gg_tsresiduals() +
+  labs(title = "drift_bc")
+```
+
+```{r}
+#| label: fig-res-stl
+#| fig-cap: "Residuales del modelo STL con Box-Cox."
+#| fig-width: 9
+#| fig-height: 5
+#| warning: false
+imports_fit_dcmp |>
+  select(stl_drift_bc) |>
+  gg_tsresiduals() +
+  labs(title = "stl_drift_bc")
+```
+
+La diferencia es evidente en la ACF. El modelo de deriva deja picos muy grandes en los rezagos 12 y 24: toda la estacionalidad se queda sin explicar, porque el método simplemente extrapola una recta. El modelo STL no tiene esos picos; solo conserva algo de autocorrelación en los primeros rezagos. En los dos casos los residuales están centrados en cero y la transformación de Box-Cox ya logró que la varianza sea estable a lo largo de la muestra.
+
+# Pronóstico sobre el conjunto de prueba
+
+```{r}
+#| label: fcst-test
+imports_fc <- imports_fit |>
+  forecast(h = nrow(imports_test))
+
+imports_fc_dcmp <- imports_fit_dcmp |>
+  forecast(h = nrow(imports_test))
+```
+
+```{r}
+#| label: accu
+imports_accu <- bind_rows(
+  imports_fc      |> accuracy(imports),
+  imports_fc_dcmp |> accuracy(imports)
+) |>
+  select(.model, ME, RMSE, MAE, MAPE, MASE, RMSSE) |>
+  arrange(RMSSE)
+
+imports_accu
+```
+
+```{r}
+#| label: fig-fc-test
+#| fig-cap: "Pronósticos sobre el periodo de prueba, con intervalos al 95%."
+#| fig-width: 9
+#| fig-height: 6
+#| warning: false
+bind_rows(imports_fc, imports_fc_dcmp) |>
+  filter(.model %in% c("drift_bc", "snaive_bc", "stl_drift_bc")) |>
+  autoplot(imports |> filter_index("2018-01" ~ .), level = 95) +
+  facet_wrap(~ .model, nrow = 3) +
+  labs(
+    title = "Pronósticos sobre el conjunto de prueba",
+    y = "Miles de unidades", x = NULL
+  )
+```
+
+Todos los modelos se quedan cortos: el error medio (`ME`) es positivo en todos los casos. La razón está en los datos, no en los modelos. En enero de 2025 la serie sube de golpe a un nivel nuevo y se queda ahí durante todo el año. Ningún método del módulo puede anticipar un cambio de nivel de ese tipo, porque todos extrapolan el comportamiento pasado.
+
+Conviene separar el periodo de prueba en dos partes:
+
+```{r}
+#| label: accu-split
+bind_rows(imports_fc, imports_fc_dcmp) |>
+  filter(.model %in% c("drift_bc", "stl_drift_bc")) |>
+  as_tibble() |>
+  select(.model, date, .mean) |>
+  left_join(as_tibble(imports_test), by = "date") |>
+  mutate(tramo = if_else(date < yearmonth("2025-01-01"),
+                         "sep-dic 2024", "ene-oct 2025")) |>
+  group_by(.model, tramo) |>
+  summarise(
+    RMSE = sqrt(mean((price - .mean)^2)),
+    MAPE = mean(abs((price - .mean) / price)) * 100,
+    .groups = "drop"
+  )
+```
+
+En los cuatro meses previos al cambio de nivel el modelo STL es casi exacto, con un MAPE de alrededor del 1%, mientras que el de deriva se equivocaba cerca del 9%. La ventaja del modelo de deriva aparece solo en 2025, y es accidental: su recta ascendente coincide por casualidad con el salto de la serie, no porque el modelo lo haya previsto.
+
+# Elección del modelo
+
+El modelo elegido es STL con Box-Cox, deriva sobre la serie desestacionalizada y SNAIVE sobre el componente estacional (stl_drift_bc). Las razones:
+
+- **Reproduce lo que la serie tiene.** La serie tiene tendencia
+  (trend_strength = r round(imports |> features(price, feat_stl) |> pull(trend_strength), 2))
+  y estacionalidad estable
+  (seasonal_strength_year = r round(imports |> features(price, feat_stl) |> pull(seasonal_strength_year), 2)).
+  El modelo asigna un método a cada componente: deriva para la parte
+  desestacionalizada y SNAIVE para la estacional. Los métodos de referencia
+  capturan uno u otro, nunca los dos.
+
+- **Es el que mejor se comporta en residuales.** Tiene el estadístico de
+  Ljung-Box más bajo de los ocho modelos y la desviación estándar de
+  residuales más baja de los que trabajan en escala Box-Cox. Sobre todo, es el
+  único junto con stl_drift que no deja autocorrelación en el rezago 12: los
+  demás la dejan, y en el caso de drift_bc es de casi 0.5.
+
+- **La ventaja de drift_bc en la tabla de exactitud no es real.** Queda
+  primero por menos de 4 mil unidades de RMSE, y solo por el tramo de 2025.
+  Además produce una línea recta sin estacionalidad, algo inservible para un
+  pronóstico mensual a 14 meses.
+
+- **La transformación es necesaria.** Comparando cada método con y sin
+  Box-Cox, la versión transformada siempre gana. Con $\lambda$ =
+  r round(lambda, 3) el modelo trabaja en una escala donde la varianza es
+  constante y las bandas de predicción se abren de forma proporcional al
+  nivel, que es como se comporta esta serie.
+
+# Pronóstico final
+
+Siguiendo el flujo, el modelo elegido se reestima con toda la serie y se pronostican los 14 meses de noviembre de 2025 a diciembre de 2026.
+
+```{r}
+#| label: refit
+imports_final_fit <- imports |>
+  model(stl_drift_bc = stl_spec_bc)
+
+imports_final_fc <- imports_final_fit |>
+  forecast(h = h)
+
+imports_final_fc |>
+  hilo(level = 95) |>
+  as_tibble() |>
+  select(date, .mean, `95%`)
+```
+
+```{r}
+#| label: fig-fc-final
+#| fig-cap: "Pronóstico a 14 meses con intervalos al 80% y 95%."
+#| fig-width: 9
+#| fig-height: 4.5
+#| warning: false
+imports_final_fc |>
+  autoplot(imports |> filter_index("2015-01" ~ .)) +
+  labs(
+    title = "Importaciones de autos mexicanos a EEUU",
+    subtitle = "Pronóstico a 14 meses, modelo STL + Box-Cox + deriva",
+    y = "Miles de unidades", x = NULL
+  )
+```
+
+El pronóstico conserva la forma estacional de la serie: enero es el mes más bajo del año pronosticado y marzo y diciembre los más altos. El nivel continúa la subida de 2025 porque la deriva se calcula sobre la serie desestacionalizada, que termina en su punto más alto.
+
+# Conclusiones
+
+El flujo completo lleva a un modelo de descomposición STL con transformación de Box-Cox, deriva para la parte desestacionalizada y SNAIVE para la estacional. Es el modelo que mejor describe la serie: capta la tendencia, el patrón mensual y el hecho de que las oscilaciones crecen con el nivel.
+
+Hay dos cosas que conviene tener presentes al leer el pronóstico. La primera es que la serie cambió de nivel en 2025 y el modelo toma ese nivel nuevo como punto de partida; si el salto resulta transitorio, el pronóstico quedará alto. La segunda es que los intervalos son anchos y se abren rápido con el horizonte, lo cual es coherente con una serie que en los últimos años ha tenido movimientos bruscos. El pronóstico puntual da la trayectoria más probable, pero el intervalo es la parte que hay que mirar para tomar decisiones.
+
+Ninguno de los modelos alcanzó residuales de ruido blanco, así que todavía queda estructura sin explicar. Este modelo es el punto de comparación que tendrán que superar los modelos de los siguientes módulos.
