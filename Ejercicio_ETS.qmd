@@ -1,0 +1,475 @@
+---
+title: "Ejercicio ETS"
+subtitle: "Modelos de descomposición y comparación de transformaciones"
+author: "Carlos Nieves"
+date: 2026-09-22
+date-format: "D [de] MMMM [de] YYYY"
+lang: es
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-title: "Contenido"
+    toc-depth: 2
+    embed-resources: true
+    code-fold: false
+    code-tools: true
+    code-overflow: wrap
+    highlight-style: github
+    fig-format: png
+    fig-dpi: 150
+    smooth-scroll: true
+execute:
+  echo: true
+  message: false
+  warning: true
+  error: false
+  cache: false
+---
+
+En este ejercicio comparo distintas formas de pronosticar las millas recorridas por vehículos en Estados Unidos. Primero cambio los métodos utilizados dentro de la descomposición STL, después mantengo el modelo base y cambio la transformación de los datos. Así puedo observar qué aporta cada decisión al pronóstico de los mismos 36 meses de prueba.
+
+# Preparación de los datos
+
+## 1. Cargar y revisar la serie
+
+Utilizo la serie mensual `TRFVOLUSM227NFWA` de [FRED](https://fred.stlouisfed.org/series/TRFVOLUSM227NFWA), publicada por la Federal Highway Administration y sin ajuste estacional. Sus valores están expresados en millones de millas. Conservo el nombre `price` del ejemplo de clase para seguir su código, aunque esta variable representa una distancia recorrida.
+
+```{r}
+#| label: paquetes
+#| results: hide
+suppressPackageStartupMessages(library(fpp3))
+suppressPackageStartupMessages(library(readr))
+
+theme_set(theme_minimal(base_size = 12))
+theme_update(
+  panel.grid.minor = element_blank(),
+  plot.title = element_text(face = "bold"),
+  strip.text = element_text(face = "bold"),
+  legend.position = "bottom"
+)
+
+# Funciones para presentar fechas y números de manera consistente.
+mes <- function(x) format(as.Date(x), "%Y-%m")
+num <- function(x, d = 2) {
+  formatC(x, format = "f", digits = d, big.mark = ",")
+}
+```
+
+La descarga se realizó el 22 de septiembre de 2026 mediante `tidyquant::tq_get()`, con el mismo identificador y la misma fecha inicial del material de clase. Guardé los datos en un CSV para que el documento se pueda volver a ejecutar con la misma muestra, aunque FRED publique observaciones nuevas o revise las anteriores.
+
+```{r}
+#| label: datos
+vm_raw <- read_csv(
+  "datos_ets/TRFVOLUSM227NFWA.csv",
+  show_col_types = FALSE
+)
+
+vm_tsb <- vm_raw |>
+  transmute(
+    date = yearmonth(observation_date),
+    price = TRFVOLUSM227NFWA
+  ) |>
+  filter(date >= yearmonth("1970-01"), date <= yearmonth("2026-09")) |>
+  as_tsibble(index = date)
+
+# La frecuencia es mensual y no debe haber meses faltantes.
+stopifnot(
+  !anyNA(vm_tsb),
+  all(vm_tsb$price > 0),
+  !any(has_gaps(vm_tsb)$.gaps)
+)
+
+tibble(
+  Observaciones = nrow(vm_tsb),
+  Inicio = mes(min(vm_tsb$date)),
+  Final = mes(max(vm_tsb$date)),
+  `Valores faltantes` = sum(is.na(vm_tsb$price)),
+  `Meses faltantes` = any(has_gaps(vm_tsb)$.gaps)
+) |>
+  knitr::kable()
+```
+
+La muestra contiene `r nrow(vm_tsb)` observaciones, de enero de 1970 a julio de 2026, sin valores ni meses faltantes. Los datos son positivos, por lo que se pueden aplicar tanto el logaritmo como Box-Cox.
+
+## 2. Separar entrenamiento y prueba
+
+Reservo los últimos 36 meses para evaluar los pronósticos y utilizo el resto para ajustar los modelos. Mantengo el orden temporal, porque el objetivo es pronosticar observaciones posteriores usando únicamente la información disponible hasta el cierre del entrenamiento.
+
+```{r}
+#| label: division
+h <- 36
+
+vm_train <- vm_tsb |> slice_head(n = nrow(vm_tsb) - h)
+vm_test  <- vm_tsb |> slice_tail(n = h)
+
+tibble(
+  Conjunto = c("Entrenamiento", "Prueba"),
+  Inicio = c(mes(min(vm_train$date)), mes(min(vm_test$date))),
+  Final = c(mes(max(vm_train$date)), mes(max(vm_test$date))),
+  Meses = c(nrow(vm_train), nrow(vm_test))
+) |>
+  knitr::kable()
+```
+
+El entrenamiento termina en julio de 2023 y la prueba abarca de agosto de 2023 a julio de 2026. Todos los modelos utilizan esta misma división, incluida la estimación de la transformación y de los componentes STL.
+
+```{r}
+#| label: fig-serie
+#| fig-cap: "Serie mensual y división temporal. El tramo naranja corresponde a los 36 meses de prueba."
+#| fig-width: 10
+#| fig-height: 4.3
+ggplot(vm_tsb, aes(x = as.Date(date), y = price)) +
+  geom_line(color = "#186A78", linewidth = 0.45) +
+  geom_line(data = vm_test, color = "#CE6A36", linewidth = 0.6) +
+  geom_vline(
+    xintercept = as.Date(min(vm_test$date)),
+    linetype = "dashed", color = "#606060"
+  ) +
+  scale_y_continuous(labels = scales::label_number(big.mark = ",")) +
+  labs(
+    title = "Millas recorridas por vehículos en Estados Unidos",
+    subtitle = "Entrenamiento de enero de 1970 a julio de 2023",
+    x = NULL, y = "Millones de millas"
+  )
+```
+
+La serie presenta crecimiento de largo plazo y oscilaciones que se repiten cada año, aunque su trayectoria cambia en algunos periodos. La caída de 2020 es especialmente marcada y se conserva en el entrenamiento, porque forma parte de la información disponible para estimar los modelos.
+
+## 3. Estimar la transformación Box-Cox
+
+Calculo el parámetro de Box-Cox mediante el método de Guerrero, usando solamente el entrenamiento. Esta transformación busca hacer más estable la variación de la serie y se mantiene igual en todos los modelos del primer ejercicio.
+
+```{r}
+#| label: lambda
+lambda <- vm_train |>
+  features(price, features = guerrero) |>
+  pull(lambda_guerrero)
+
+tibble(`Lambda de Guerrero` = lambda) |>
+  knitr::kable(digits = 4)
+```
+
+El valor estimado es `r num(lambda, 4)`. La transformación reduce la diferencia de escala entre niveles altos y bajos, aunque esto no garantiza que desaparezcan los cambios bruscos o la dependencia temporal que todavía pueda quedar en la serie.
+
+# Ejercicio 1. Cambiar los métodos de los componentes
+
+## 4. Ajustar el modelo base y dos alternativas
+
+`decomposition_model()` permite aplicar distintos métodos a los componentes obtenidos con STL. La variable `season_adjust` contiene la serie desestacionalizada, que todavía incluye la tendencia y el componente irregular, mientras que `season_year` representa la estacionalidad anual.
+
+Conservo el modelo base con deriva sobre `season_adjust`. En la primera alternativa lo sustituyo por ETS y escribo explícitamente `SNAIVE(season_year)`. En la segunda mantengo la deriva y utilizo ETS para el componente estacional, de modo que los dos cambios puedan evaluarse por separado.
+
+| Modelo | Método para `season_adjust` | Método para `season_year` |
+|---|---|---|
+| `baseline` | Caminata aleatoria con deriva | SNAIVE, utilizado por defecto |
+| `ets_snaive` | ETS sin estacionalidad | SNAIVE explícito |
+| `drift_ets` | Caminata aleatoria con deriva | ETS con error y estacionalidad aditivos, sin tendencia |
+
+SNAIVE repite el último valor observado del mismo mes del año. Es también el método que `decomposition_model()` usa cuando no se especifica cómo pronosticar la parte estacional, según su [documentación](https://fabletools.tidyverts.org/reference/decomposition_model.html). Por ello, escribirlo explícitamente permite identificar el método, pero el cambio efectivo de `ets_snaive` está en la parte desestacionalizada.
+
+```{r}
+#| label: modelos-ejercicio-1
+vm_fit_ex <- vm_train |>
+  model(
+    baseline = decomposition_model(
+      STL(box_cox(price, lambda), robust = TRUE),
+      RW(season_adjust ~ drift())
+    ),
+    ets_snaive = decomposition_model(
+      STL(box_cox(price, lambda), robust = TRUE),
+      ETS(season_adjust ~ season("N")),
+      SNAIVE(season_year)
+    ),
+    drift_ets = decomposition_model(
+      STL(box_cox(price, lambda), robust = TRUE),
+      RW(season_adjust ~ drift()),
+      ETS(season_year ~ error("A") + trend("N") + season("A"))
+    )
+  )
+```
+
+En `ets_snaive` fijo `season("N")` porque STL ya retiró la estacionalidad, y dejo que ETS seleccione el error y la tendencia. Para `season_year` utilizo un ETS aditivo, ya que este componente toma valores positivos y negativos alrededor de cero. La opción `robust = TRUE` reduce la influencia de observaciones atípicas al estimar los componentes STL, sin eliminar los datos de 2020.
+
+## 5. Pronosticar y comparar los errores
+
+Cada modelo genera 36 pronósticos desde el final del entrenamiento. Los comparo con las observaciones reales mediante MAPE, que expresa el error absoluto porcentual promedio, y RMSSE, que compara el error cuadrático del pronóstico con una escala calculada a partir de las diferencias estacionales del entrenamiento. En ambas medidas, un valor menor representa un mejor resultado.
+
+```{r}
+#| label: exactitud-ejercicio-1
+vm_fc_ex <- vm_fit_ex |> forecast(h = h)
+
+acc_ex <- vm_fc_ex |>
+  accuracy(vm_tsb) |>
+  select(.model, MAPE, RMSSE, RMSE) |>
+  arrange(MAPE)
+
+acc_ex |>
+  knitr::kable(
+    digits = c(0, 3, 3, 1),
+    col.names = c("Modelo", "MAPE (%)", "RMSSE", "RMSE (millones de millas)")
+  )
+```
+
+Las métricas se calculan sobre la escala original de millones de millas, porque `fable` revierte la transformación al producir los pronósticos. Pasar la serie completa a `accuracy()` permite alinear las fechas de prueba y calcular la escala del RMSSE con el entrenamiento, sin volver a ajustar los modelos.
+
+```{r}
+#| label: fig-pronosticos-modelos
+#| fig-cap: "Comparación de los modelos con los datos observados. La línea vertical marca el inicio de la prueba."
+#| fig-width: 10
+#| fig-height: 7
+fc_ex_plot <- vm_fc_ex |> as_tibble()
+observado <- vm_tsb |>
+  filter(date >= yearmonth("2022-01")) |>
+  as_tibble()
+
+ggplot(fc_ex_plot, aes(x = as.Date(date))) +
+  geom_line(
+    data = observado, aes(y = price, color = "Observado"),
+    linewidth = 0.6
+  ) +
+  geom_line(aes(y = .mean, color = "Pronóstico"), linewidth = 0.65) +
+  geom_vline(
+    xintercept = as.Date(min(vm_test$date)),
+    linetype = "dashed", color = "#777777"
+  ) +
+  facet_wrap(vars(.model), ncol = 1) +
+  scale_color_manual(values = c("Observado" = "#424B54", "Pronóstico" = "#186A78")) +
+  scale_y_continuous(labels = scales::label_number(big.mark = ",")) +
+  labs(x = NULL, y = "Millones de millas", color = NULL)
+```
+
+El modelo `ets_snaive` obtiene el menor MAPE, con `r num(acc_ex$MAPE[acc_ex$.model == "ets_snaive"], 3)` %, frente a `r num(acc_ex$MAPE[acc_ex$.model == "baseline"], 3)` % del modelo base. La mejora es de apenas `r num(acc_ex$MAPE[acc_ex$.model == "baseline"] - acc_ex$MAPE[acc_ex$.model == "ets_snaive"], 3)` puntos porcentuales, por lo que su ventaja en esta muestra es pequeña.
+
+Al revisar el RMSSE, el orden cambia. El modelo base registra `r num(acc_ex$RMSSE[acc_ex$.model == "baseline"], 3)`, mientras que `ets_snaive` obtiene `r num(acc_ex$RMSSE[acc_ex$.model == "ets_snaive"], 3)`. ETS reduce el error porcentual promedio, pero presenta un error cuadrático mayor, una medida que penaliza más las equivocaciones grandes. Por ello, no considero que domine al modelo base en todos los criterios.
+
+```{r}
+#| label: diferencia-estacional
+comparacion_estacional <- vm_fc_ex |>
+  as_tibble() |>
+  select(.model, date, .mean) |>
+  pivot_wider(names_from = .model, values_from = .mean)
+
+diferencia_maxima <- max(abs(
+  comparacion_estacional$baseline - comparacion_estacional$drift_ets
+))
+```
+
+`drift_ets` produce resultados prácticamente iguales a los del modelo base. Sus pronósticos difieren como máximo en `r num(diferencia_maxima, 2)` millones de millas, una cantidad pequeña frente al nivel mensual de la serie. En este caso, sustituir SNAIVE por ETS en el componente estacional no aporta una mejora apreciable, aunque sí cambia el método con el que se modela ese componente.
+
+# Ejercicio 2. Cambiar la transformación
+
+## 6. Comparar la serie original, el logaritmo y Box-Cox
+
+Ahora mantengo la estructura del modelo base y ajusto tres versiones, cambiando únicamente la transformación aplicada antes de STL. En todas utilizo deriva para la parte desestacionalizada y SNAIVE por defecto para la estacionalidad, con los mismos datos de entrenamiento y el mismo horizonte.
+
+```{r}
+#| label: modelos-transformaciones
+vm_fit_trans <- vm_train |>
+  model(
+    original = decomposition_model(
+      STL(price, robust = TRUE),
+      RW(season_adjust ~ drift())
+    ),
+    logaritmo = decomposition_model(
+      STL(log(price), robust = TRUE),
+      RW(season_adjust ~ drift())
+    ),
+    boxcox = decomposition_model(
+      STL(box_cox(price, lambda), robust = TRUE),
+      RW(season_adjust ~ drift())
+    )
+  )
+
+vm_fc_trans <- vm_fit_trans |> forecast(h = h)
+
+acc_trans <- vm_fc_trans |>
+  accuracy(vm_tsb) |>
+  select(.model, MAPE, RMSSE, RMSE) |>
+  arrange(MAPE)
+
+acc_trans |>
+  knitr::kable(
+    digits = c(0, 3, 3, 1),
+    col.names = c("Transformación", "MAPE (%)", "RMSSE", "RMSE (millones de millas)")
+  )
+```
+
+```{r}
+#| label: fig-pronosticos-transformaciones
+#| fig-cap: "Pronósticos del mismo modelo base bajo tres transformaciones, todos expresados en la escala original."
+#| fig-width: 10
+#| fig-height: 7
+ggplot(as_tibble(vm_fc_trans), aes(x = as.Date(date))) +
+  geom_line(
+    data = observado, aes(y = price, color = "Observado"),
+    linewidth = 0.6
+  ) +
+  geom_line(aes(y = .mean, color = "Pronóstico"), linewidth = 0.65) +
+  geom_vline(
+    xintercept = as.Date(min(vm_test$date)),
+    linetype = "dashed", color = "#777777"
+  ) +
+  facet_wrap(vars(.model), ncol = 1) +
+  scale_color_manual(values = c("Observado" = "#424B54", "Pronóstico" = "#CE6A36")) +
+  scale_y_continuous(labels = scales::label_number(big.mark = ",")) +
+  labs(x = NULL, y = "Millones de millas", color = NULL)
+```
+
+La transformación sí modifica la precisión del pronóstico. Box-Cox obtiene el menor MAPE, de `r num(acc_trans$MAPE[acc_trans$.model == "boxcox"], 3)` %, y el menor RMSSE, de `r num(acc_trans$RMSSE[acc_trans$.model == "boxcox"], 3)`. El logaritmo queda en segundo lugar y la serie sin transformar presenta los errores más altos. Frente a esta última, Box-Cox reduce el MAPE aproximadamente `r num(100 * (1 - acc_trans$MAPE[acc_trans$.model == "boxcox"] / acc_trans$MAPE[acc_trans$.model == "original"]), 1)` %.
+
+En esta comparación elegiría Box-Cox porque mejora ambos criterios sobre el mismo periodo de prueba. Los tres RMSSE son menores que uno, lo que indica que el error cuadrático de prueba es menor que la escala del ingenuo estacional calculada en el entrenamiento. Esto no demuestra, por sí solo, que los modelos superen a SNAIVE en el mismo periodo de prueba, porque esa sería otra comparación.
+
+## 7. Revisar los componentes restantes de STL
+
+Para responder cuál transformación deja un componente más parecido a ruido blanco, reviso el `remainder` de cada descomposición. Este componente es lo que queda después de retirar la tendencia y la estacionalidad, y es distinto del error de pronóstico de los 36 meses reservados.
+
+```{r}
+#| label: componentes-stl
+stl_fit <- vm_train |>
+  model(
+    original = STL(price, robust = TRUE),
+    logaritmo = STL(log(price), robust = TRUE),
+    boxcox = STL(box_cox(price, lambda), robust = TRUE)
+  )
+
+# Extraigo cada descomposición por separado porque sus escalas son distintas.
+extraer_resto <- function(ajuste) {
+  ajuste |>
+    components() |>
+    as_tibble() |>
+    select(.model, date, remainder)
+}
+
+restos <- bind_rows(
+  extraer_resto(select(stl_fit, original)),
+  extraer_resto(select(stl_fit, logaritmo)),
+  extraer_resto(select(stl_fit, boxcox))
+) |>
+  as_tsibble(index = date, key = .model)
+
+# Centro y divido entre la desviación estándar para comparar las gráficas.
+restos_std <- restos |>
+  group_by(.model) |>
+  mutate(remainder_std = (remainder - mean(remainder)) / sd(remainder)) |>
+  ungroup()
+```
+
+Como los tres componentes están en escalas diferentes, los centro y los divido entre su desviación estándar para graficarlos. Este ajuste facilita la comparación visual, pero no elimina su autocorrelación ni los cambios de dispersión a lo largo del tiempo.
+
+```{r}
+#| label: fig-restos
+#| fig-cap: "Componentes restantes estandarizados. Se utiliza la misma escala vertical en los tres paneles."
+#| fig-width: 10
+#| fig-height: 7
+ggplot(restos_std, aes(x = as.Date(date), y = remainder_std)) +
+  geom_hline(yintercept = 0, color = "#999999") +
+  geom_line(color = "#186A78", linewidth = 0.45) +
+  facet_wrap(vars(.model), ncol = 1) +
+  labs(x = NULL, y = "Resto estandarizado")
+```
+
+En las tres versiones sobresale la caída de 2020. STL robusto deja buena parte de ese movimiento en el componente restante, y varios meses consecutivos presentan desviaciones importantes. Por eso, no basta con que los valores oscilen alrededor de cero para considerarlos ruido blanco, también necesito revisar si conservan relación con los meses anteriores.
+
+```{r}
+#| label: fig-acf-restos
+#| fig-cap: "Autocorrelación de los componentes restantes hasta 36 meses. Las bandas son una referencia aproximada al 95 %."
+#| fig-width: 10
+#| fig-height: 7
+acf_restos <- restos_std |> ACF(remainder_std, lag_max = 36)
+banda <- 1.96 / sqrt(nrow(vm_train))
+
+acf_restos |>
+  as_tibble() |>
+  mutate(rezago = as.numeric(lag)) |>
+  ggplot(aes(x = rezago, y = acf)) +
+  geom_hline(yintercept = 0, color = "#777777") +
+  geom_hline(
+    yintercept = c(-banda, banda),
+    linetype = "dashed", color = "#CE6A36"
+  ) +
+  geom_segment(aes(xend = rezago, yend = 0), color = "#186A78") +
+  facet_wrap(vars(.model), ncol = 1) +
+  scale_x_continuous(breaks = c(1, 6, 12, 18, 24, 30, 36)) +
+  labs(x = "Rezago en meses", y = "Autocorrelación")
+```
+
+Complemento las gráficas con la prueba de Ljung-Box a 24 rezagos y con el promedio de las autocorrelaciones absolutas hasta el rezago 36. Este último es un resumen descriptivo para comparar su magnitud, no una prueba adicional de ruido blanco. Como los componentes se estimaron con STL, tomo Ljung-Box como un diagnóstico orientativo junto con las gráficas.
+
+```{r}
+#| label: diagnostico-restos
+acf_resumen <- acf_restos |>
+  as_tibble() |>
+  group_by(.model) |>
+  summarise(
+    acf_1 = acf[as.numeric(lag) == 1],
+    media_abs_acf = mean(abs(acf)),
+    .groups = "drop"
+  )
+
+diagnostico <- restos_std |>
+  features(remainder_std, ljung_box, lag = 24, dof = 0) |>
+  # La cola superior evita redondear valores p muy pequeños a cero.
+  mutate(lb_pvalue = pchisq(lb_stat, df = 24, lower.tail = FALSE)) |>
+  left_join(acf_resumen, by = ".model")
+
+diagnostico |>
+  transmute(
+    `Transformación` = .model,
+    `ACF del rezago 1` = round(acf_1, 3),
+    `Promedio de |ACF|` = round(media_abs_acf, 4),
+    `Ljung-Box (24)` = round(lb_stat, 2),
+    `Valor p aproximado` = formatC(lb_pvalue, format = "e", digits = 2)
+  ) |>
+  knitr::kable()
+```
+
+La versión logarítmica presenta ligeramente menos dependencia temporal según la magnitud promedio de las autocorrelaciones. Su promedio de valores absolutos es `r num(diagnostico$media_abs_acf[diagnostico$.model == "logaritmo"], 4)`, frente a `r num(diagnostico$media_abs_acf[diagnostico$.model == "boxcox"], 4)` con Box-Cox y `r num(diagnostico$media_abs_acf[diagnostico$.model == "original"], 4)` sin transformación. También tiene el menor estadístico de Ljung-Box, aunque la diferencia entre las versiones es reducida.
+
+Aun así, ninguna ofrece un componente restante que pueda considerar ruido blanco. Las tres conservan una autocorrelación de alrededor de 0.56 a 0.57 en el primer rezago y valores p menores que 0.001, además de la concentración de desviaciones extremas en 2020. El logaritmo presenta una ventaja pequeña en estos diagnósticos, mientras que Box-Cox produce los mejores pronósticos del segundo ejercicio, por lo que ambos resultados responden a preguntas distintas.
+
+# Comentario final
+
+Si priorizo el error porcentual promedio del primer ejercicio, elegiría `ets_snaive`, aunque su ventaja es pequeña y el modelo base conserva un menor error cuadrático. Para la comparación de transformaciones elegiría Box-Cox, porque reduce tanto MAPE como RMSSE frente al logaritmo y a la serie original. Estas elecciones se sostienen en los 36 meses evaluados y no garantizan el mismo orden en otro periodo.
+
+La revisión del componente restante también muestra una limitación concreta. Los modelos capturan buena parte de la trayectoria y la estacionalidad, pero todavía queda dependencia temporal y un movimiento muy marcado en 2020. Por ello, una precisión razonable en la prueba no implica que la descomposición haya explicado todo el comportamiento de la serie.
+
+# Fuentes y reproducción
+
+Los datos y sus unidades se consultaron en [FRED, serie TRFVOLUSM227NFWA](https://fred.stlouisfed.org/series/TRFVOLUSM227NFWA). El comportamiento de los modelos por componentes y de las métricas se verificó en la documentación de [decomposition_model()](https://fabletools.tidyverts.org/reference/decomposition_model.html) y [medidas de exactitud de fabletools](https://fabletools.tidyverts.org/reference/point_accuracy_measures.html).
+
+Para volver a generar este documento, el archivo `Ejercicio_ETS.qmd` debe conservarse junto a la carpeta `datos_ets`, y se debe ejecutar **Render** en RStudio. El HTML contiene sus gráficas y recursos integrados. Los resultados se calcularon con R `r getRversion()`, fpp3 `r packageVersion("fpp3")`, fable `r packageVersion("fable")` y feasts `r packageVersion("feasts")`.
+
+```{r}
+#| label: verificar-resultados
+#| include: false
+# Verifico fechas, horizonte y métricas con cálculos directos.
+stopifnot(nrow(vm_test) == 36, max(vm_train$date) < min(vm_test$date))
+escala_rmsse <- sqrt(mean(diff(vm_train$price, lag = 12)^2))
+verificar_metricas <- function(pronosticos, tabla) {
+  calculo <- pronosticos |>
+    as_tibble() |>
+    select(.model, date, .mean) |>
+    left_join(as_tibble(vm_test), by = "date") |>
+    group_by(.model) |>
+    summarise(
+      n = n(),
+      mape_manual = mean(abs((price - .mean) / price)) * 100,
+      rmsse_manual = sqrt(mean((price - .mean)^2)) / escala_rmsse,
+      .groups = "drop"
+    ) |>
+    left_join(tabla, by = ".model")
+  stopifnot(
+    all(calculo$n == 36),
+    all(is.finite(calculo$mape_manual)),
+    max(abs(calculo$mape_manual - calculo$MAPE)) < 1e-8,
+    max(abs(calculo$rmsse_manual - calculo$RMSSE)) < 1e-8
+  )
+}
+verificar_metricas(vm_fc_ex, acc_ex)
+verificar_metricas(vm_fc_trans, acc_trans)
+stopifnot(isTRUE(all.equal(
+  acc_ex$MAPE[acc_ex$.model == "baseline"],
+  acc_trans$MAPE[acc_trans$.model == "boxcox"]
+)))
+```

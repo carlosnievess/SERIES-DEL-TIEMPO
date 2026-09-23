@@ -1,0 +1,28 @@
+Datos del Ejercicio ETS
+
+Serie: TRFVOLUSM227NFWA — Vehicle Miles Traveled
+Fuente original: U.S. Federal Highway Administration
+Distribución: FRED, Federal Reserve Bank of St. Louis
+Página: https://fred.stlouisfed.org/series/TRFVOLUSM227NFWA
+Fecha de consulta y descarga: 2026-09-22
+Frecuencia: mensual, sin ajuste estacional
+Unidad: millones de millas
+Muestra descargada: enero de 1970 a julio de 2026, 679 observaciones
+
+La descarga se realizó en R con tidyquant::tq_get(
+  "TRFVOLUSM227NFWA", get = "economic.data",
+  from = "1970-01-01", to = "2026-09-22"
+).
+Se guardaron las columnas date y price como observation_date y
+TRFVOLUSM227NFWA en el archivo CSV.
+
+El documento utiliza esta copia local para mantener los mismos datos
+al volver a renderizar. La fuente puede revisar observaciones históricas,
+por lo que otra descarga posterior puede generar resultados diferentes.
+
+Entrenamiento: enero de 1970 a julio de 2023, 643 observaciones.
+Prueba: agosto de 2023 a julio de 2026, 36 observaciones.
+Lambda Box-Cox: estimado con Guerrero solo sobre el entrenamiento.
+
+Conserva esta carpeta junto a Ejercicio_ETS.qmd para volver a generar
+el HTML desde RStudio.
