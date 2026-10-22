@@ -1,0 +1,733 @@
+---
+title: "Pronóstico de ventas semanales"
+subtitle: "Proyecto Módulo 2 · Series de Tiempo · Equipo 1"
+author:
+  - Fernanda Dueñas
+  - Santiago Villegas
+  - Carlos Nieves
+date: 2026-10-23
+date-format: "D [de] MMMM [de] YYYY"
+lang: es
+lightbox: false
+execute:
+  echo: true
+  warning: true
+format:
+  revealjs:
+    width: 1280
+    height: 720
+    margin: 0.05
+    slide-number: c/t
+    transition: fade
+    code-line-numbers: false
+    include-in-header:
+      text: |
+        <style>
+        :root {
+          --azul: #12355b;
+          --acento: #1f7a8c;
+          --suave: #eef5f8;
+          --r-main-font-size: 36px;
+          --r-heading-color: #12355b;
+          --r-link-color: #1f7a8c;
+        }
+        .reveal .slides section { text-align: left; }
+        .reveal h2 {
+          font-size: 1.35em;
+          border-bottom: 3px solid var(--acento);
+          padding-bottom: 0.12em;
+          margin-bottom: 0.4em;
+        }
+        .reveal h1 { color: var(--azul); }
+        .reveal .slides section.level1 { text-align: center !important; }
+        .reveal section.level1 h1 {
+          display: inline-block;
+          font-size: 2.1em;
+          border-bottom: 5px solid var(--acento);
+          padding-bottom: 0.15em;
+        }
+        #title-slide { text-align: center !important; }
+        #title-slide .title { font-size: 1.9em; color: var(--azul); margin-top: 1.2em; }
+        #title-slide .subtitle { font-size: 0.95em; color: var(--acento); }
+        #title-slide .quarto-title-author-name { font-size: 0.85em; }
+        #title-slide .date { font-size: 0.75em; color: #555; }
+        .reveal ul { margin-left: 0.6em; }
+        .reveal li { font-size: 0.82em; margin-bottom: 0.32em; }
+        .reveal li li { font-size: 0.92em; }
+        .reveal p { font-size: 0.85em; }
+        .reveal pre { font-size: 0.48em; margin: 0.25em 0; box-shadow: none; width: 100%; }
+        .reveal pre code { max-height: 440px; padding: 0.4em 0.6em; }
+        .reveal div.sourceCode { margin: 0.2em 0; }
+        .reveal .cell-output pre code { background: var(--suave); }
+        .reveal .cell-output-stderr pre { font-size: 0.32em; opacity: 0.7; margin: 0.05em 0; }
+        .reveal .cell-output-stderr pre code { max-height: 2.6em; overflow-y: auto; background: #fbf6e9; }
+        .reveal .validacion .cell-output-stderr pre { font-size: 0.75em; opacity: 1; }
+        .reveal .validacion .cell-output-stderr pre code { max-height: none; background: #e8f5e9; color: #1b5e20; }
+        .reveal .dos-columnas code { column-count: 2; column-gap: 2.2em; column-rule: 1px solid #d0dbe2; }
+        .reveal .dos-columnas pre, .reveal pre.dos-columnas { font-size: 0.33em; }
+        .reveal .dos-columnas code, .reveal pre.dos-columnas code { max-height: none !important; }
+        .reveal .avisos pre { font-size: 0.3em; opacity: 0.7; margin: 0.05em 0; }
+        .reveal .avisos pre code { max-height: 2.4em; overflow-y: auto; background: #fbf6e9; }
+        .reveal table { font-size: 0.68em; margin: 0.3em 0; }
+        .reveal table th { background: var(--azul); color: white; }
+        .reveal table td, .reveal table th { padding: 0.25em 0.6em; }
+        .reveal .destacado {
+          background: var(--suave);
+          border-left: 6px solid var(--acento);
+          padding: 0.35em 0.7em;
+          font-size: 0.8em;
+          margin-top: 0.4em;
+        }
+        .reveal .nota { font-size: 0.6em; color: #555; }
+        </style>
+---
+
+```{r}
+#| label: inicio
+#| include: false
+library(tidyverse)
+library(fpp3)
+
+load("datos/ventas_semana_train.RData")
+```
+
+# Datos
+
+## Ventas semanales y esquema de evaluación
+
+:::: {.columns}
+::: {.column width="62%"}
+```{r}
+#| label: serie
+#| echo: false
+#| fig-width: 8
+#| fig-height: 4.6
+ventas_semana_train |>
+  autoplot(total) +
+  labs(title = "Ventas semanales, 2021 W01 a 2026 W30", y = "Pesos (MXN)", x = NULL)
+```
+:::
+
+::: {.column width="38%"}
+- 290 semanas sin huecos.
+- Pronóstico: **2026 W31–W42**, 12 semanas.
+- Entrenamiento hasta 2026 W18 y prueba en 2026 W19–W30.
+- Revisión adicional en la misma temporada (W31–W42) de 2023, 2024 y 2025.
+- Criterio de selección: **MAPE**, la métrica del concurso.
+
+```{r}
+#| label: particion
+h <- 12
+ventas_train <- ventas_semana_train |>
+  slice_head(n = nrow(ventas_semana_train) - h)
+ventas_test <- ventas_semana_train |>
+  slice_tail(n = h)
+```
+:::
+::::
+
+::: {.notes}
+La serie tiene tendencia creciente y un patrón anual muy marcado, con picos al cierre de cada año. Por eso trabajamos con una descomposición STL que separa la estacionalidad anual.
+
+Para elegir el modelo reservamos las últimas 12 semanas como prueba, la misma longitud del horizonte que entregamos. Como un solo test de 12 semanas es ruidoso, también repetimos la comparación en W31–W42 de 2023, 2024 y 2025, que es justamente la temporada que vamos a pronosticar. En todos los casos los modelos se estiman solo con datos anteriores al periodo evaluado.
+:::
+
+# Transformación y outliers
+
+## Transformación: la escala original pronostica mejor
+
+```{r}
+#| label: transformaciones
+#| echo: false
+#| collapse: true
+#| classes: avisos
+lambda <- ventas_train |>
+  features(total, features = guerrero) |>
+  pull(lambda_guerrero)
+
+lambda_completo <- ventas_semana_train |>
+  features(total, features = guerrero) |>
+  pull(lambda_guerrero)
+
+ventas_trans_fit <- ventas_train |>
+  model(
+    stl_ets = decomposition_model(
+      STL(total ~ season(period = "year"), robust = TRUE),
+      ETS(season_adjust ~ season("N"))
+    ),
+    stl_ets_log = decomposition_model(
+      STL(log(total) ~ season(period = "year"), robust = TRUE),
+      ETS(season_adjust ~ season("N"))
+    ),
+    stl_ets_bc = decomposition_model(
+      STL(box_cox(total, lambda) ~ season(period = "year"), robust = TRUE),
+      ETS(season_adjust ~ season("N"))
+    )
+  )
+
+ventas_trans_accu <- ventas_trans_fit |>
+  forecast(h = nrow(ventas_test)) |>
+  accuracy(ventas_semana_train)
+
+mape_pesos <- ventas_trans_accu |> filter(.model == "stl_ets") |> pull(MAPE)
+mape_bc <- ventas_trans_accu |> filter(.model == "stl_ets_bc") |> pull(MAPE)
+mape_log <- ventas_trans_accu |> filter(.model == "stl_ets_log") |> pull(MAPE)
+rmse_pesos <- ventas_trans_accu |> filter(.model == "stl_ets") |> pull(RMSE)
+rmse_log <- ventas_trans_accu |> filter(.model == "stl_ets_log") |> pull(RMSE)
+```
+
+:::: {.columns}
+::: {.column width="50%"}
+Mismo modelo (STL robusta + ETS) en tres escalas, evaluado en 2026 W19–W30:
+
+| Escala | MAPE | RMSE (MXN) |
+|---|---:|---:|
+| **Pesos, sin transformar** | **`r sprintf("%.2f %%", mape_pesos)`** | `r sprintf("%.0f", rmse_pesos)` |
+| Box-Cox, $\lambda$ = `r sprintf("%.3f", lambda)` | `r sprintf("%.2f %%", mape_bc)` | `r sprintf("%.0f", ventas_trans_accu |> filter(.model == "stl_ets_bc") |> pull(RMSE))` |
+| Logaritmo | `r sprintf("%.2f %%", mape_log)` | `r sprintf("%.0f", rmse_log)` |
+:::
+
+::: {.column width="50%"}
+- $\lambda$ de Guerrero estimada **solo con el entrenamiento**: `r sprintf("%.3f", lambda)` (con las 290 semanas sería `r sprintf("%.3f", lambda_completo)`).
+- Box-Cox y logaritmo **aumentan el MAPE**; el logaritmo solo mejora el RMSE.
+- Las ventas son positivas y el pronóstico se mantiene positivo sin transformar.
+
+::: {.destacado}
+**Decisión:** modelar las ventas en pesos.
+:::
+:::
+::::
+
+::: {.notes}
+Guerrero sugiere una transformación porque la variación crece con el nivel, pero eso no garantiza un mejor pronóstico. Lo comprobamos: estimamos lambda solo con el entrenamiento, para no usar información del test, y ajustamos el mismo esquema de STL robusta con ETS en pesos, con Box-Cox y con logaritmo.
+
+En el test, la escala original tiene el menor MAPE. Las versiones transformadas regresan a pesos con ajuste por sesgo y aun así quedan cerca de dos puntos arriba. El logaritmo reduce el RMSE, pero el concurso se califica con MAPE, así que conservamos la escala original. Además, en las escalas transformadas R eligió ETS con tendencia, ETS(A,A,N), mientras que en pesos eligió ETS(A,N,N).
+:::
+
+## Outliers: los identificamos, pero no los sustituimos
+
+:::: {.columns}
+::: {.column width="55%"}
+```{r}
+#| label: detectar-outliers
+c_threshold <- 3
+
+ventas_dcmp <- ventas_train |>
+  model(stl = STL(total ~ season(period = "year"), robust = TRUE)) |>
+  components()
+
+ventas_outliers <- ventas_dcmp |>
+  filter(
+    remainder < quantile(remainder, 0.25) - c_threshold * IQR(remainder) |
+    remainder > quantile(remainder, 0.75) + c_threshold * IQR(remainder)
+  )
+
+ventas_outliers |>
+  as_tibble() |>
+  select(semana, total, remainder)
+```
+:::
+
+::: {.column width="45%"}
+```{r}
+#| label: imputar-outliers
+#| echo: false
+#| collapse: true
+#| classes: avisos
+ventas_miss <- ventas_train |>
+  anti_join(ventas_outliers, by = "semana") |>
+  fill_gaps()
+
+ventas_limpias <- ventas_miss |>
+  model(ARIMA(total)) |>
+  interpolate(ventas_miss)
+
+ventas_limpias_accu <- ventas_limpias |>
+  model(
+    stl_ets_limpio = decomposition_model(
+      STL(total ~ season(period = "year"), robust = TRUE),
+      ETS(season_adjust ~ season("N"))
+    )
+  ) |>
+  forecast(h = nrow(ventas_test)) |>
+  accuracy(ventas_semana_train)
+
+mape_limpio <- ventas_limpias_accu |> pull(MAPE)
+```
+
+- Regla IQR ($c = 3$) sobre el residuo de una **STL anual robusta**, solo con el entrenamiento.
+- Prueba: quitar esas semanas, `fill_gaps()` e imputar con `ARIMA() |> interpolate()`.
+
+| Tratamiento | MAPE test |
+|---|---:|
+| **Conservar los datos** | **`r sprintf("%.2f %%", mape_pesos)`** |
+| Imputar con ARIMA | `r sprintf("%.2f %%", mape_limpio)` |
+
+::: {.destacado}
+**Decisión:** conservar las ventas originales.
+:::
+:::
+::::
+
+::: {.notes}
+Usamos el procedimiento de la clase 3.1: regla IQR sobre el residuo de una STL robusta. Usamos la descomposición anual completa y no season(period = 1), porque con esta serie el residuo se llenaría de los picos de diciembre, que son estacionalidad y no anomalías. Con un umbral de 3 se marcan seis semanas del entrenamiento, entre ellas 2021 W43 y cierres e inicios de año.
+
+Para decidir con evidencia, las retiramos, rellenamos los huecos con fill_gaps e imputamos con ARIMA, todo dentro del entrenamiento y sin tocar el test. El MAPE no mejora, así que conservamos los datos. No sabemos si esas semanas fueron eventos o errores de registro, así que sustituirlas sin esa información sería arriesgado. La STL robusta ya reduce su peso al estimar la tendencia y la estacionalidad, aunque no las borra de la serie desestacionalizada.
+:::
+
+# Modelado
+
+## Modelos probados
+
+:::: {.columns}
+::: {.column width="55%"}
+```{r}
+#| label: candidatos
+benchmark_spec <- decomposition_model(
+  STL(total ~ season(period = "year"), robust = TRUE),
+  RW(season_adjust ~ drift())
+)
+stl_ets_spec <- decomposition_model(
+  STL(total ~ season(period = "year"), robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+stl_arima_spec <- decomposition_model(
+  STL(total ~ season(period = "year"), robust = TRUE),
+  ARIMA(season_adjust ~ PDQ(0, 0, 0), approximation = FALSE)
+)
+
+ventas_fit <- ventas_train |>
+  model(
+    benchmark = benchmark_spec,
+    stl_ets   = stl_ets_spec,
+    stl_arima = stl_arima_spec,
+    sarima    = ARIMA(total, approximation = FALSE)
+  )
+```
+:::
+
+::: {.column width="45%"}
+| Modelo | Lo que estimó R |
+|---|---|
+| `benchmark` | STL + RW con deriva + SNAIVE |
+| `stl_ets` | STL + **ETS(A,N,N)** + SNAIVE |
+| `stl_arima` | STL + ARIMA(1,1,2) con deriva + SNAIVE |
+| `sarima` | ARIMA(0,1,1)(0,1,1)[52] |
+| `stl_ets_log`, `stl_ets_bc` | STL + ETS(A,A,N) + SNAIVE |
+| `stl_ets_limpio` | STL + ETS(A,N,N) sobre datos imputados |
+
+<p class="nota">Estructuras confirmadas con `report()` (siguiente diapositiva). El aviso de R indica que el periodo anual, 52.18 semanas, se redondea a 52 en SNAIVE.</p>
+:::
+::::
+
+::: {.notes}
+Todos los modelos de descomposición usan la misma STL robusta del benchmark, con periodo anual. Lo que cambia es cómo se pronostica la serie desestacionalizada: el benchmark usa caminata aleatoria con deriva, nosotros probamos ETS y ARIMA no estacionales. A ETS le quitamos la estacionalidad porque STL ya la separó y dejamos que R eligiera error y tendencia. En ARIMA fijamos PDQ(0,0,0) por la misma razón y usamos approximation = FALSE, como se recomienda para el ajuste final. También probamos una SARIMA directa sobre las ventas, sin descomposición.
+
+La estacionalidad de todos los modelos de descomposición se pronostica con SNAIVE, que es el default de decomposition_model.
+:::
+
+## Verificación con `report()`: lo especificado es lo estimado
+
+:::: {.columns}
+::: {.column width="34%"}
+```{r}
+#| label: report-ets
+ventas_fit |>
+  select(stl_ets) |>
+  report()
+```
+:::
+
+::: {.column width="34%"}
+```{r}
+#| label: report-arima
+ventas_fit |>
+  select(stl_arima) |>
+  report()
+```
+:::
+
+::: {.column width="32%"}
+```{r}
+#| label: report-sarima
+ventas_fit |>
+  select(sarima) |>
+  report()
+```
+:::
+::::
+
+::: {.notes}
+Revisamos report de cada candidato para confirmar qué modelo se estimó realmente. En nuestro modelo, ETS sin estacionalidad terminó siendo ETS(A,N,N): error aditivo, sin tendencia, con alpha cercano a 0.14, es decir, un suavizamiento del nivel. STL con ARIMA eligió ARIMA(1,1,2) con deriva, así que proyecta un crecimiento constante. La SARIMA directa eligió ARIMA(0,1,1)(0,1,1)[52], con diferencia estacional de 52 semanas. En las escalas transformadas, ETS eligió tendencia aditiva, ETS(A,A,N), lo que confirma que la transformación cambia el modelo que se selecciona y no solo la escala.
+:::
+
+## Modelo final: STL robusta + ETS(A,N,N) + SNAIVE
+
+:::: {.columns}
+::: {.column width="50%"}
+```{r}
+#| label: ajuste-completo
+ventas_final_fit <- ventas_semana_train |>
+  model(stl_ets = stl_ets_spec)
+
+ventas_final_fit |>
+  report()
+```
+:::
+
+::: {.column width="50%"}
+$$
+y_t = \underbrace{S_t}_{\text{SNAIVE}} + \underbrace{A_t}_{\text{ETS(A,N,N)}}
+$$
+
+- **STL robusta anual**: separa `season_year` y reduce el peso de las semanas extremas.
+- **ETS(A,N,N)** sobre `season_adjust`: el nivel se actualiza con $\alpha \approx 0.14$ y se proyecta sin tendencia.
+- **SNAIVE** repite el último patrón estacional estimado.
+- Respecto al benchmark solo cambia una pieza: **ETS en lugar de la deriva**.
+:::
+::::
+
+::: {.notes}
+Con las 290 semanas, report confirma ETS(A,N,N) con alpha de 0.138. Esto significa que cada semana nueva mueve el nivel cerca de 14 % hacia el dato observado, así que el nivel reacciona a lo reciente sin depender de una sola semana. El pronóstico de la serie desestacionalizada es plano, y las 12 semanas varían porque se le suma la estacionalidad anual que repite SNAIVE.
+
+La diferencia con el benchmark es que no extrapolamos una deriva lineal. En una serie cuyo crecimiento se está frenando, esa deriva tiende a llevar el pronóstico demasiado lejos.
+:::
+
+# Evaluación
+
+## Prueba 2026 W19–W30: comparación con el benchmark
+
+```{r}
+#| label: accuracy-test
+#| echo: false
+#| collapse: true
+#| classes: avisos
+ventas_fc <- ventas_fit |>
+  forecast(h = nrow(ventas_test))
+
+ventas_accu <- bind_rows(
+  ventas_fc |> accuracy(ventas_semana_train),
+  ventas_trans_accu |> filter(.model != "stl_ets"),
+  ventas_limpias_accu
+) |>
+  select(.model, MAPE, RMSE, MASE) |>
+  arrange(MAPE)
+```
+
+:::: {.columns}
+::: {.column width="58%"}
+```{r}
+#| label: grafica-test
+#| echo: false
+#| fig-width: 7.5
+#| fig-height: 4.6
+ventas_fc |>
+  filter(.model %in% c("benchmark", "stl_ets", "stl_arima")) |>
+  autoplot(ventas_semana_train |> filter_index("2025 W40" ~ .), level = NULL) +
+  labs(title = "Pronósticos en el periodo de prueba", y = "Pesos (MXN)", x = NULL)
+```
+:::
+
+::: {.column width="42%"}
+```{r}
+#| label: tabla-test
+#| echo: false
+ventas_accu |>
+  mutate(
+    MAPE = sprintf("%.2f", MAPE),
+    RMSE = sprintf("%.0f", RMSE),
+    MASE = sprintf("%.2f", MASE)
+  )
+```
+
+::: {.destacado}
+`stl_ets` tiene el menor MAPE y reduce el error del benchmark a casi la tercera parte.
+:::
+:::
+::::
+
+::: {.notes}
+En las 12 semanas de prueba, STL con ETS obtiene un MAPE de 11.47 %, contra 32.05 % del benchmark. STL con ARIMA queda muy cerca, con 11.84 %, y la SARIMA directa queda en 17.66 %, por lo que la descartamos. Las variantes con transformación o con limpieza de outliers quedan por detrás del modelo en pesos con los datos originales.
+
+Como la diferencia entre ETS y ARIMA es pequeña, no decidimos con este único test: lo revisamos también en la misma temporada de años anteriores.
+:::
+
+## La misma temporada en años anteriores (W31–W42)
+
+```{r}
+#| label: cortes-temporada
+#| echo: false
+#| collapse: true
+#| classes: avisos
+ventas_fit_2023 <- ventas_semana_train |>
+  filter_index(. ~ "2023 W30") |>
+  model(benchmark = benchmark_spec, stl_ets = stl_ets_spec, stl_arima = stl_arima_spec)
+ventas_accu_2023 <- ventas_fit_2023 |>
+  forecast(h = 12) |>
+  accuracy(ventas_semana_train) |>
+  mutate(temporada = "2023")
+
+ventas_fit_2024 <- ventas_semana_train |>
+  filter_index(. ~ "2024 W30") |>
+  model(benchmark = benchmark_spec, stl_ets = stl_ets_spec, stl_arima = stl_arima_spec)
+ventas_accu_2024 <- ventas_fit_2024 |>
+  forecast(h = 12) |>
+  accuracy(ventas_semana_train) |>
+  mutate(temporada = "2024")
+
+ventas_fit_2025 <- ventas_semana_train |>
+  filter_index(. ~ "2025 W30") |>
+  model(benchmark = benchmark_spec, stl_ets = stl_ets_spec, stl_arima = stl_arima_spec)
+ventas_accu_2025 <- ventas_fit_2025 |>
+  forecast(h = 12) |>
+  accuracy(ventas_semana_train) |>
+  mutate(temporada = "2025")
+
+ventas_temporada <- bind_rows(ventas_accu_2023, ventas_accu_2024, ventas_accu_2025)
+
+mape_temporada <- ventas_temporada |>
+  group_by(.model) |>
+  summarise(MAPE = mean(MAPE))
+
+mape_t <- ventas_temporada |>
+  select(temporada, .model, MAPE)
+```
+
+```{r}
+#| label: nivel-crecimiento
+#| echo: false
+#| collapse: true
+#| classes: avisos
+ventas_arima_final <- ventas_semana_train |>
+  model(stl_arima = stl_arima_spec) |>
+  forecast(h = 12)
+ventas_ets_final <- ventas_final_fit |>
+  forecast(h = 12)
+
+media_2025 <- ventas_semana_train |>
+  filter_index("2025 W31" ~ "2025 W42") |>
+  as_tibble() |>
+  summarise(media = mean(total)) |>
+  pull(media)
+crec_acumulado <- 100 * (
+  (ventas_semana_train |> filter_index("2026 W01" ~ "2026 W30") |> as_tibble() |> summarise(m = mean(total)) |> pull(m)) /
+  (ventas_semana_train |> filter_index("2025 W01" ~ "2025 W30") |> as_tibble() |> summarise(m = mean(total)) |> pull(m)) - 1
+)
+crec_reciente <- 100 * (
+  (ventas_semana_train |> filter_index("2026 W19" ~ "2026 W30") |> as_tibble() |> summarise(m = mean(total)) |> pull(m)) /
+  (ventas_semana_train |> filter_index("2025 W19" ~ "2025 W30") |> as_tibble() |> summarise(m = mean(total)) |> pull(m)) - 1
+)
+crec_ets <- 100 * (mean(ventas_ets_final$.mean) / media_2025 - 1)
+crec_arima <- 100 * (mean(ventas_arima_final$.mean) / media_2025 - 1)
+```
+
+:::: {.columns}
+::: {.column width="52%"}
+MAPE entrenando hasta W30 de cada año y pronosticando W31–W42:
+
+| Temporada | STL + ETS | STL + ARIMA | Benchmark |
+|---|---:|---:|---:|
+| 2023 | `r sprintf("%.2f", mape_t |> filter(temporada == "2023", .model == "stl_ets") |> pull(MAPE))` | `r sprintf("%.2f", mape_t |> filter(temporada == "2023", .model == "stl_arima") |> pull(MAPE))` | **`r sprintf("%.2f", mape_t |> filter(temporada == "2023", .model == "benchmark") |> pull(MAPE))`** |
+| 2024 | `r sprintf("%.2f", mape_t |> filter(temporada == "2024", .model == "stl_ets") |> pull(MAPE))` | **`r sprintf("%.2f", mape_t |> filter(temporada == "2024", .model == "stl_arima") |> pull(MAPE))`** | `r sprintf("%.2f", mape_t |> filter(temporada == "2024", .model == "benchmark") |> pull(MAPE))` |
+| 2025 | **`r sprintf("%.2f", mape_t |> filter(temporada == "2025", .model == "stl_ets") |> pull(MAPE))`** | `r sprintf("%.2f", mape_t |> filter(temporada == "2025", .model == "stl_arima") |> pull(MAPE))` | `r sprintf("%.2f", mape_t |> filter(temporada == "2025", .model == "benchmark") |> pull(MAPE))` |
+| **Promedio** | **`r sprintf("%.2f", mape_temporada |> filter(.model == "stl_ets") |> pull(MAPE))`** | `r sprintf("%.2f", mape_temporada |> filter(.model == "stl_arima") |> pull(MAPE))` | `r sprintf("%.2f", mape_temporada |> filter(.model == "benchmark") |> pull(MAPE))` |
+:::
+
+::: {.column width="48%"}
+Crecimiento frente a las mismas semanas de 2025:
+
+| | Crecimiento |
+|---|---:|
+| Observado 2026 W01–W30 | `r sprintf("%.1f %%", crec_acumulado)` |
+| Observado 2026 W19–W30 | `r sprintf("%.1f %%", crec_reciente)` |
+| Pronóstico STL + ETS | `r sprintf("%.1f %%", crec_ets)` |
+| Pronóstico STL + ARIMA | `r sprintf("%.1f %%", crec_arima)` |
+
+::: {.destacado}
+**Elegimos STL + ETS:** menor MAPE promedio en la temporada objetivo, más simple y con un nivel acorde al crecimiento observado, que se está frenando.
+:::
+:::
+::::
+
+::: {.notes}
+Repetimos la comparación entrenando hasta la semana 30 de 2023, 2024 y 2025 y pronosticando W31–W42 de cada año. Ningún modelo gana siempre: en 2023 el mejor fue el benchmark y en 2024 ARIMA, pero en promedio STL con ETS tiene el menor MAPE, y en 2025, el año más parecido al actual, también gana.
+
+El otro argumento es el nivel. ARIMA incluye una deriva y proyecta 18 % más que la misma temporada de 2025; ETS proyecta cerca de 14 %. En lo que va de 2026 las ventas crecen 13 %, pero en las últimas 12 semanas solo 3 %. Extrapolar una deriva en ese contexto aumenta el riesgo de sobrestimar las ventas. Tenemos claro que un nivel más prudente no garantiza un MAPE menor: es una decisión práctica respaldada por la temporada objetivo.
+:::
+
+## Diagnóstico de residuales del modelo final
+
+```{r}
+#| label: diagnostico
+#| echo: false
+ventas_residuales <- ventas_final_fit |>
+  augment()
+ventas_ljung <- ventas_residuales |>
+  features(.innov, ljung_box, lag = 24, dof = 0)
+```
+
+:::: {.columns}
+::: {.column width="64%"}
+```{r}
+#| label: grafica-residuales
+#| echo: false
+#| collapse: true
+#| classes: avisos
+#| fig-width: 8
+#| fig-height: 4.8
+ventas_final_fit |>
+  gg_tsresiduals() +
+  labs(title = "Innovaciones del modelo final", y = "Pesos (MXN)", x = NULL)
+```
+:::
+
+::: {.column width="36%"}
+- Ljung-Box, 24 rezagos: $p$ = `r sprintf("%.4f", ventas_ljung$lb_pvalue)`.
+- **Queda autocorrelación**: los residuales no son ruido blanco.
+- Media positiva, cerca de `r sprintf("%.0f", mean(ventas_residuales$.innov, na.rm = TRUE))` pesos: ligera subestimación dentro de muestra.
+- Mayor dispersión en 2025–2026.
+- Las primeras 52 semanas no tienen innovación porque SNAIVE necesita un año previo.
+
+<p class="nota">Limitaciones: Semana Santa cambia de semana cada año, el calendario ISO tiene años de 53 semanas y no conocemos eventos ni cierres.</p>
+:::
+::::
+
+::: {.notes}
+El diagnóstico usa las innovaciones del ajuste con todas las semanas. Con 24 rezagos, Ljung-Box rechaza la ausencia de autocorrelación al 5 %, así que no podemos decir que los residuales sean ruido blanco: el modelo deja estructura sin capturar. Lo tomamos como diagnóstico exploratorio, porque la prueba no descuenta la estimación de la STL.
+
+La media de las innovaciones es positiva, una ligera subestimación dentro de muestra, y la dispersión aumenta en 2025 y 2026, como se ve en la gráfica. El modelo tampoco captura festivos móviles como Semana Santa ni eventos como bodas, porque no tenemos esa información. Si la desaceleración se acentúa, el pronóstico podría quedar por arriba de las ventas reales.
+:::
+
+# Pronóstico final
+
+## Pronóstico entregado: 2026 W31–W42
+
+:::: {.columns}
+::: {.column width="38%"}
+```{r}
+#| label: pronostico-final
+equipo_1 <- ventas_semana_train |>
+  model(
+    equipo_1 = decomposition_model(
+      STL(total ~ season(period = "year"),
+          robust = TRUE),
+      ETS(season_adjust ~ season("N"))
+    )
+  ) |>
+  forecast(h = 12)
+```
+
+::: {.destacado}
+Media semanal pronosticada: **`r sprintf("%.0f", mean(equipo_1$.mean))` pesos**, `r sprintf("%.1f %%", 100 * (mean(equipo_1$.mean) / media_2025 - 1))` más que W31–W42 de 2025.
+:::
+:::
+
+::: {.column width="62%"}
+```{r}
+#| label: grafica-pronostico
+#| echo: false
+#| fig-width: 7.8
+#| fig-height: 5
+equipo_1 |>
+  autoplot(ventas_semana_train |> filter_index("2024 W01" ~ .)) +
+  labs(title = "Pronóstico e intervalos de predicción", y = "Pesos (MXN)", x = NULL)
+```
+:::
+::::
+
+::: {.notes}
+Reestimamos el modelo con las 290 semanas, sin transformar ni sustituir observaciones, y pronosticamos las 12 semanas pedidas con un solo modelo llamado equipo_1. La media semanal pronosticada es de unos 86 300 pesos, cerca de 14 % arriba de la misma temporada de 2025. El patrón semana a semana viene del componente estacional, por ejemplo la subida de W42, y las bandas muestran los intervalos de predicción de 80 y 95 %.
+:::
+
+## Validación y guardado de la entrega
+
+::: {.validacion}
+::: {.dos-columnas}
+```{r}
+#| label: funcion-validacion
+validar_entrega <- function(fc, nombre, maestria = FALSE,
+                            inicio = yearweek("2026 W31")) {
+  semanas_esperadas <- inicio + 0:11
+  problemas <- character()
+  if (!inherits(fc, "fbl_ts")) {
+    stop("El objeto no es un fable (fbl_ts). Debe ser la salida de forecast().")
+  }
+  idx <- fc[[index_var(fc)]]
+  if (!inherits(idx, "yearweek")) {
+    problemas <- c(problemas, "El índice no es de clase yearweek.")
+  }
+  modelos <- unique(fc$.model)
+  if (length(modelos) != 1 || modelos[1] != nombre) {
+    problemas <- c(problemas, sprintf(
+      "Debe haber un solo modelo llamado '%s'. Se encontró: %s",
+      nombre, paste(modelos, collapse = ", ")
+    ))
+  }
+  if (nrow(fc) != 12 ||
+      !isTRUE(all.equal(sort(as.Date(idx)), as.Date(semanas_esperadas)))) {
+    problemas <- c(problemas,
+      paste("El pronóstico debe cubrir exactamente 12 semanas, de",
+            format(inicio), "a", format(inicio + 11)))
+  }
+  if (!identical(response_vars(fc), "total")) {
+    problemas <- c(problemas, "La variable pronosticada debe llamarse 'total'.")
+  }
+  if (anyNA(fc$.mean) || any(fc$.mean <= 0)) {
+    problemas <- c(problemas, "Hay pronósticos faltantes, negativos o en cero.")
+  }
+  if (maestria) {
+    v <- distributional::variance(fc[[distribution_var(fc)]])
+    if (anyNA(v) || any(v <= 0)) {
+      problemas <- c(problemas,
+        "La distribución del pronóstico es degenerada: no hay intervalos válidos.")
+    }
+  }
+  if (length(problemas) == 0) {
+    message("✔ Entrega válida.")
+  } else {
+    stop(paste0("✖ ", problemas, collapse = "\n"))
+  }
+  invisible(TRUE)
+}
+```
+:::
+
+:::: {.columns}
+::: {.column width="30%"}
+```{r}
+#| label: medias-1
+#| echo: false
+equipo_1 |>
+  as_tibble() |>
+  select(semana, .mean) |>
+  mutate(.mean = sprintf("%.2f", .mean)) |>
+  slice_head(n = 6)
+```
+:::
+
+::: {.column width="30%"}
+```{r}
+#| label: medias-2
+#| echo: false
+equipo_1 |>
+  as_tibble() |>
+  select(semana, .mean) |>
+  mutate(.mean = sprintf("%.2f", .mean)) |>
+  slice_tail(n = 6)
+```
+:::
+
+::: {.column width="40%"}
+```{r}
+#| label: validar-y-guardar
+#| message: true
+validar_entrega(equipo_1, "equipo_1")
+save(equipo_1, file = "equipo_1.RData")
+```
+:::
+::::
+:::
+
+::: {.notes}
+Antes de guardar, ejecutamos la función de validación del proyecto sin modificarla. Comprueba que sea un fable con índice semanal, que haya un solo modelo llamado equipo_1, que cubra exactamente de 2026 W31 a W42, que la variable sea total y que no haya medias faltantes ni negativas. La validación pasa y guardamos el mismo objeto en equipo_1.RData, que se genera al renderizar este documento.
+:::

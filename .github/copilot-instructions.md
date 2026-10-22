@@ -1,11 +1,11 @@
 # Instrucciones del repositorio SERIES-DEL-TIEMPO
 
-Repositorio del alumno para la materia Series de Tiempo (ITESO). El trabajo se hace en documentos Quarto (`.qmd`) con R, `tidyverse` y `fpp3`. Las clases se dan a partir del sitio del profesor (https://pbenavidesh.github.io/narsil/docs/modules/), que tiene todo el semestre; ya se vieron las clases 1.1 a 2.4. El objetivo es ayudar con actividades y exámenes usando únicamente lo que ya se vio en clase. Las carpetas `contrahuella/`, `output/` y `tmp/` no son de la materia y no deben usarse como referencia.
+Repositorio del alumno para la materia Series de Tiempo (ITESO). El trabajo se hace en documentos Quarto (`.qmd`) con R, `tidyverse` y `fpp3`. Las clases se dan a partir del sitio del profesor (https://pbenavidesh.github.io/narsil/docs/modules/), que tiene todo el semestre; ya se vieron las clases 1.1 a 3.1. El objetivo es ayudar con actividades y exámenes usando únicamente lo que ya se vio en clase. Las carpetas `contrahuella/`, `output/` y `tmp/` no son de la materia y no deben usarse como referencia.
 
 ## Regla principal
 
 - Usa únicamente librerías, funciones y argumentos que aparezcan en `.github/instructions/r-clase.instructions.md` o en las instrucciones y el código inicial de la actividad actual.
-- No uses nada de las clases 3.1 en adelante del sitio mientras no se vean.
+- No uses nada de las clases 3.2 en adelante del sitio mientras no se vean.
 - Las tareas `pronostico_importaciones_autos.qmd` y `Ejercicio_ETS.qmd` no son fuente de métodos: no copies estructuras suyas que no estén en las clases vistas.
 - No propongas atajos ni versiones más sofisticadas de lo visto aunque den el mismo resultado.
 - Si no hay antecedente en lo visto, no inventes una técnica: explica brevemente que todavía no se ha visto.
@@ -43,10 +43,14 @@ Uso principal durante los exámenes. Cuando un bloque de código tenga un coment
 - ARIMA y SARIMA manuales y automáticos, `glance` con AICc, `report`, diagnóstico de residuales, STL + ARIMA: clase 2.3 (`module_2/03_arima/arima.html`).
 - Combinaciones modulares STL + ETS + ARIMA y su comparación con `accuracy`: clase 2.4 (`module_2/04_modular_fcst/modular_forecasting.html`).
 
+### Módulo 3: problemas prácticos
+
+- Outliers con el residuo de STL (`season(period = 1)`, `robust = TRUE`) y la regla IQR, quitarlos con `anti_join` + `fill_gaps`, imputar con `ARIMA` + `interpolate`, `log` para pronósticos positivos y logit escalado con `new_transformation`: clase 3.1 (`module_3/01_practical_issues/practical_issues.html`).
+
 ## No usar
 
-- Lo de los módulos 3 y 4 mientras no se vea: `TSLM`, `trend()` y `season()` como regresores de `TSLM`, `fourier`, regresión dinámica con variables exógenas, `prophet`, `cross_validate` o `stretch_tsibble`, `bootstrapped` o `generate` para *bagging*, `reconcile`, `aggregate_key`, `combination_model`.
-- Lo que solo aparece en las tareas hechas con IA: `ggplot` construido desde cero con `geom_segment`, `geom_hline`, `geom_vline` o `scale_*`, `theme_set`, `theme_update`, `pivot_wider`, `left_join`, `transmute`, `knitr::kable`, `scales::label_number`, `stopifnot`.
+- Lo de las clases 3.2 en adelante mientras no se vea: `TSLM`, `trend()` y `season()` como regresores de `TSLM`, `fourier`, regresión dinámica con variables exógenas, `prophet`, `cross_validate` o `stretch_tsibble`, `bootstrapped` o `generate` para *bagging*, `reconcile`, `aggregate_key`, `combination_model`.
+- Lo que solo aparece en las tareas hechas con IA: `ggplot` construido desde cero con `geom_segment`, `geom_vline` o `scale_*`, `theme_set`, `theme_update`, `pivot_wider`, `transmute`, `knitr::kable`, `scales::label_number`, `stopifnot`.
 - `%>%`, `theme_narsil()` y funciones de paquetes que no se cargan en clase.
 
 Esta lista cambia conforme se ven clases nuevas: cuando una clase vista use algo de aquí, pasa a estar permitido.

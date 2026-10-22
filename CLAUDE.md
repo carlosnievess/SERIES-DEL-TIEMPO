@@ -69,12 +69,12 @@ Al empezar una actividad de esta materia:
 - Después dile al alumno, antes de empezar, qué detectaste y qué quedó permitido.
 - Si no hay cambios, no digas nada y sigue con la actividad.
 
-Última revisión: commit `df5639d` (12 oct 2026). Avance confirmado con Canvas: el examen del módulo 2 fue el
-9 oct 2026.
+Última revisión: commit `d46f7de` (21 oct 2026). El alumno confirmó el 21 oct 2026 que la clase 3.1 ya cuenta
+como vista.
 
 ## Clases vistas
 
-Clase más avanzada vista: `2.4` (módulos 1 y 2 completos).
+Clase más avanzada vista: `3.1` (módulos 1 y 2 completos y la primera clase del módulo 3).
 
 - Módulo 1, métodos de pronóstico basados en descomposición:
   - `1.1` R, tsibble y series de tiempo: `module_1/01_time_series/r_time_series.html`
@@ -87,7 +87,10 @@ Clase más avanzada vista: `2.4` (módulos 1 y 2 completos).
   - `2.3` Modelos ARIMA: `module_2/03_arima/arima.html`
   - `2.4` Pronóstico modular, ETS y ARIMA combinados: `module_2/04_modular_fcst/modular_forecasting.html`
 
-Siguiente clase que se volverá vista: `3.1` Practical Issues (`module_3/01_practical_issues/practical_issues.html`).
+- Módulo 3:
+  - `3.1` Problemas prácticos: outliers, valores faltantes y transformaciones con límites: `module_3/01_practical_issues/practical_issues.html`
+
+Siguiente clase que se volverá vista: `3.2` Regresión (`module_3/02_regression/regression.html`).
 
 Archivos de clase del repositorio: `Primer documento de Quarto.qmd` (clase 1.1) y `Descomposición.qmd` (clase 1.2).
 Tareas del alumno (con ayuda de IA): `pronostico_importaciones_autos.qmd`, `Ejercicio_ETS.qmd`.
@@ -103,5 +106,6 @@ Tareas del alumno (con ayuda de IA): `pronostico_importaciones_autos.qmd`, `Ejer
 | Ejercicio ETS | Terminado (23 sep 2026) |
 | Exámenes de los módulos 1 y 2 | Hechos |
 | Actividad SARIMA | Sin fecha en Canvas |
+| Proyecto M2: pronóstico de ventas semanales | En curso (entrega 23 oct 2026, equipo 1) |
 | Examen del módulo 3 | 9 nov 2026 |
 | Proyecto M4 | 3 dic 2026 |

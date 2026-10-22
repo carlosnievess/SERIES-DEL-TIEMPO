@@ -4,7 +4,7 @@ applyTo: "**/*.qmd,**/*.R"
 
 # Estructuras de R vistas en clase
 
-Estas reglas se aplican a los documentos Quarto y R. La lista reúne lo visto en las clases 1.1 a 2.4 del sitio del profesor (https://pbenavidesh.github.io/narsil/docs/modules/) y en los archivos de clase del repositorio. Crece conforme se ven clases nuevas. Si algo no está aquí ni en la actividad actual, no debe proponerse.
+Estas reglas se aplican a los documentos Quarto y R. La lista reúne lo visto en las clases 1.1 a 3.1 del sitio del profesor (https://pbenavidesh.github.io/narsil/docs/modules/) y en los archivos de clase del repositorio. Crece conforme se ven clases nuevas. Si algo no está aquí ni en la actividad actual, no debe proponerse.
 
 ## Librerías permitidas
 
@@ -181,6 +181,33 @@ serie_fit |>
 
 - Otras combinaciones: STL + ARIMA (`ARIMA(season_adjust ~ PDQ(0, 0, 0))`), STL + ETS para la tendencia y `ARIMA(season_year)` para la estacionalidad, y STL + ARIMA con `ETS(season_year ~ trend("N"))`.
 - Descarga de series con `tq_get()`, fecha con `yearmonth()` y la columna renombrada a `y`.
+
+## Clase 3.1: problemas prácticos (outliers, faltantes y límites)
+
+Outliers con el residuo de una STL que solo quita la tendencia y la regla IQR:
+
+```r
+serie_dcmp <- serie |>
+  model(
+    stl = STL(y ~ season(period = 1), robust = TRUE)
+  ) |>
+  components()
+
+c_threshold <- 1.5
+
+serie_outliers <- serie_dcmp |>
+  filter(
+    remainder < quantile(remainder, 0.25) - c_threshold * IQR(remainder) |
+    remainder > quantile(remainder, 0.75) + c_threshold * IQR(remainder)
+  )
+```
+
+- `c_threshold = 3` marca solo los casos extremos. Si se sospechan outliers dentro del patrón estacional, se usa una descomposición estacional completa.
+- Quitar outliers y dejar el hueco explícito: `serie |> anti_join(serie_outliers, by = "fecha") |> fill_gaps()`.
+- Imputar con ARIMA (ETS no admite `NA`): `serie_miss |> model(ARIMA(y)) |> interpolate(serie_miss)`.
+- Comparar original, faltante e imputado: `rename()` y `left_join(..., by = "fecha")`, luego `filter(fecha %in% serie_outliers$fecha)`.
+- Pronósticos positivos con `log(y)` dentro del modelo; límites `[a, b]` con un logit escalado creado con `new_transformation(scaled_logit, inv_scaled_logit)`.
+- En sus gráficas aparece `geom_hline(yintercept = 0, colour = ..., linetype = "dashed")`.
 
 ## Respuesta a comentarios
 

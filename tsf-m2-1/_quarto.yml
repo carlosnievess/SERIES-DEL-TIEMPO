@@ -1,0 +1,32 @@
+# Configuración compartida — repos de proyecto de la clase de Series de tiempo
+# Coloca este archivo en la raíz del repo del equipo.
+#
+# Nota: NO declara `project: type:`, así que Quarto no convierte esta
+# carpeta en un sitio/proyecto de navegación (nav bar, sidebar, etc.).
+# Solo aplica estas opciones por default a cualquier .qmd que rindan aquí.
+
+engine: knitr  # fija R/knitr como motor
+
+format:
+  revealjs:
+    embed-resources: true   # una sola presentación autocontenida: fácil
+                             # de compartir o subir a Canvas
+    theme: default           # temas disponibles: https://quarto.org/docs/presentations/revealjs/themes.html
+    slide-number: true
+    scrollable: true
+    transition: slide
+    preview-links: true
+    table:
+      striped: true
+      hover: true
+      responsive: true
+    html-math-method: katex  # para ecuaciones (ARIMA, suavizamiento, etc.)
+
+code-overflow: wrap   # evita scroll horizontal en pipes largos
+lightbox: true         # clic para hacer zoom en las figuras
+code-link: true        # enlaza nombres de función (ETS(), ARIMA(), etc.) a su documentación
+
+knitr:
+  opts_chunk:
+    paged.print: false      # necesario para que las mables/fables/hilo
+                             # se rendericen correctamente en tablas HTML
