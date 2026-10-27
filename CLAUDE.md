@@ -69,12 +69,13 @@ Al empezar una actividad de esta materia:
 - Después dile al alumno, antes de empezar, qué detectaste y qué quedó permitido.
 - Si no hay cambios, no digas nada y sigue con la actividad.
 
-Última revisión: commit `d46f7de` (21 oct 2026). El alumno confirmó el 21 oct 2026 que la clase 3.1 ya cuenta
-como vista.
+Última revisión: commit `fecc52c` (27 oct 2026). El alumno solicitó el ejercicio de la clase 4.1 el 27 oct
+2026. Conforme a la regla de avance, las clases hasta 4.1 cuentan como vistas; esto no registra sus
+ejercicios como terminados.
 
 ## Clases vistas
 
-Clase más avanzada vista: `3.1` (módulos 1 y 2 completos y la primera clase del módulo 3).
+Clase más avanzada vista: `4.1` (módulos 1, 2 y 3 completos y la primera clase del módulo 4).
 
 - Módulo 1, métodos de pronóstico basados en descomposición:
   - `1.1` R, tsibble y series de tiempo: `module_1/01_time_series/r_time_series.html`
@@ -89,8 +90,14 @@ Clase más avanzada vista: `3.1` (módulos 1 y 2 completos y la primera clase de
 
 - Módulo 3:
   - `3.1` Problemas prácticos: outliers, valores faltantes y transformaciones con límites: `module_3/01_practical_issues/practical_issues.html`
+  - `3.2` Regresión de series de tiempo: `module_3/02_regression/regression.html`
+  - `3.3` Regresión dinámica y armónica: `module_3/03_dynamic/dynamic_regression.html`
+  - `3.4` Prophet: `module_3/04_prophet/prophet.html`
 
-Siguiente clase que se volverá vista: `3.2` Regresión (`module_3/02_regression/regression.html`).
+- Módulo 4:
+  - `4.1` Estacionalidad compleja: `module_4/01_complex_seasonality/complex_seasonality.html`
+
+Siguiente clase que se volverá vista: `4.2` Robustez y combinación de pronósticos.
 
 Archivos de clase del repositorio: `Primer documento de Quarto.qmd` (clase 1.1) y `Descomposición.qmd` (clase 1.2).
 Tareas del alumno (con ayuda de IA): `pronostico_importaciones_autos.qmd`, `Ejercicio_ETS.qmd`.
